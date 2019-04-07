@@ -30,64 +30,46 @@ trait SharedSpawnExt: SharedSpawn {
 impl<Sp: SharedSpawn + ?Sized> SharedSpawnExt for Sp {}
 
 thread_local! {
-    static GLOBAL_SPAWNER: RefCell<Option<GlobalSpawner>> = RefCell::new(None);
+    static GLOBAL_SPAWNER: RefCell<Option<Arc<dyn SharedSpawn + Send + Sync + 'static>>> = RefCell::new(None);
 }
 
-#[derive(Clone)]
-struct GlobalSpawner {
-    spawner: Arc<dyn SharedSpawn + Send + Sync + 'static>,
-}
+#[derive(Clone, Copy, Debug)]
+struct GlobalSpawner;
 
-impl GlobalSpawner {
-    fn new(spawner: impl SharedSpawn + Send + Sync + 'static) -> GlobalSpawner {
-        GlobalSpawner {
-            spawner: Arc::new(spawner)
-        }
-    }
-}
-
-impl Spawn for &GlobalSpawner {
+impl Spawn for GlobalSpawner {
     fn spawn_obj(&mut self, future: FutureObj<'static, ()>) -> Result<(), SpawnError> {
-        let spawner = self.clone();
-        self.spawner.spawn(async move {
-            set_global_spawner(spawner);
-            await!(future);
+        GLOBAL_SPAWNER.with(|spawner| {
+            let spawner = spawner.borrow();
+            let spawner = spawner.as_ref().expect("global spawner was set");
+            spawner.spawn({
+                let spawner = spawner.clone();
+                async move {
+                    GLOBAL_SPAWNER.with(|global_spawner| global_spawner.replace(Some(spawner)));
+                    await!(future);
+                }
+            })
         })
     }
 
     fn status(&self) -> Result<(), SpawnError> {
-        self.spawner.status()
+        GLOBAL_SPAWNER.with(|spawner| {
+            spawner.borrow().as_ref().unwrap().status()
+        })
     }
 }
 
-fn set_global_spawner(spawner: GlobalSpawner) {
-    GLOBAL_SPAWNER.with(|global_spawner| global_spawner.replace(Some(spawner)));
+pub fn set_global_spawner<Sp: Send + Sync + 'static>(spawner: Sp) where for<'a> &'a Sp: Spawn {
+    GLOBAL_SPAWNER.with(|global_spawner| global_spawner.replace(Some(Arc::new(spawner))));
 }
 
-fn with_global_spawner<R>(f: impl FnOnce(&GlobalSpawner) -> R) -> R {
-    GLOBAL_SPAWNER.with(|global_spawner| {
-        f(global_spawner.borrow().as_ref().unwrap())
-    })
+pub fn spawner() -> impl Spawn {
+    GlobalSpawner
 }
 
-pub fn set_spawner<Sp: Send + Sync + 'static>(spawner: Sp) where for<'a> &'a Sp: Spawn {
-    set_global_spawner(GlobalSpawner::new(spawner));
+pub fn spawn(fut: impl Future<Output = ()> + Send + 'static) -> Result<(), SpawnError> {
+    spawner().spawn(fut)
 }
 
-pub fn with_spawner<R>(f: impl FnOnce(&mut Spawn) -> R) -> R {
-    with_global_spawner(|mut global_spawner| {
-        f(&mut global_spawner)
-    })
-}
-
-pub fn spawn(fut: impl Future<Output = ()> + Send + 'static) {
-    with_global_spawner(|spawner| {
-        spawner.spawn(fut).unwrap()
-    })
-}
-
-pub fn spawn_with_handle<Fut: Future + Send + 'static>(fut: Fut) -> RemoteHandle<Fut::Output> where Fut::Output: Send {
-    with_global_spawner(|mut spawner| {
-        spawner.spawn_with_handle(fut).unwrap()
-    })
+pub fn spawn_with_handle<Fut: Future + Send + 'static>(fut: Fut) -> Result<RemoteHandle<Fut::Output>, SpawnError> where Fut::Output: Send {
+    spawner().spawn_with_handle(fut)
 }
