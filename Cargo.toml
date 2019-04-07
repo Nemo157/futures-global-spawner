@@ -1,0 +1,12 @@
+[package]
+name = "futures-global-spawner"
+version = "0.1.0"
+authors = ["Wim Looman <wim@nemo157.com>"]
+edition = "2018"
+
+[dependencies]
+futures-core-preview = "0.3.0-alpha.13"
+futures-util-preview = "0.3.0-alpha.13"
+
+[dev-dependencies]
+futures-preview = "0.3.0-alpha.13"
