@@ -1,9 +1,10 @@
 #![feature(futures_api, async_await, await_macro)]
 
 use futures_core::{task::{Spawn, SpawnError}, future::{Future, FutureObj}};
-use futures_util::{task::SpawnExt, future::{self, RemoteHandle}};
+use futures_util::{task::SpawnExt, future::RemoteHandle};
 
-use std::{cell::RefCell, sync::Arc, pin::Pin};
+use std::sync::RwLock;
+use lazy_static::lazy_static;
 
 trait SharedSpawn {
     fn spawn_obj(&self, future: FutureObj<'static, ()>) -> Result<(), SpawnError>;
@@ -29,37 +30,27 @@ trait SharedSpawnExt: SharedSpawn {
 
 impl<Sp: SharedSpawn + ?Sized> SharedSpawnExt for Sp {}
 
-thread_local! {
-    static GLOBAL_SPAWNER: RefCell<Option<Arc<dyn SharedSpawn + Send + Sync + 'static>>> = RefCell::new(None);
+lazy_static! {
+    static ref GLOBAL_SPAWNER: RwLock<Option<Box<dyn SharedSpawn + Send + Sync + 'static>>> = RwLock::new(None);
 }
 
 #[derive(Clone, Copy, Debug)]
 struct GlobalSpawner;
 
 impl Spawn for GlobalSpawner {
-    fn spawn_obj(&mut self, mut future: FutureObj<'static, ()>) -> Result<(), SpawnError> {
-        GLOBAL_SPAWNER.with(|spawner| {
-            let spawner = spawner.borrow();
-            let spawner = spawner.as_ref().expect("global spawner was set");
-            spawner.spawn({
-                let spawner = spawner.clone();
-                future::poll_fn(move |waker| {
-                    GLOBAL_SPAWNER.with(|global_spawner| global_spawner.replace(Some(spawner.clone())));
-                    Pin::new(&mut future).poll(waker)
-                })
-            })
-        })
+    fn spawn_obj(&mut self, future: FutureObj<'static, ()>) -> Result<(), SpawnError> {
+        let spawner = GLOBAL_SPAWNER.read().unwrap();
+        let spawner = spawner.as_ref().expect("global spawner was set");
+        spawner.spawn(future)
     }
 
     fn status(&self) -> Result<(), SpawnError> {
-        GLOBAL_SPAWNER.with(|spawner| {
-            spawner.borrow().as_ref().unwrap().status()
-        })
+        GLOBAL_SPAWNER.read().unwrap().as_ref().unwrap().status()
     }
 }
 
 pub fn set_global_spawner<Sp: Send + Sync + 'static>(spawner: Sp) where for<'a> &'a Sp: Spawn {
-    GLOBAL_SPAWNER.with(|global_spawner| global_spawner.replace(Some(Arc::new(spawner))));
+    GLOBAL_SPAWNER.write().unwrap().replace(Box::new(spawner));
 }
 
 pub fn spawner() -> impl Spawn {
