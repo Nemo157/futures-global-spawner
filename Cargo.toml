@@ -10,3 +10,4 @@ futures-util-preview = "0.3.0-alpha.13"
 
 [dev-dependencies]
 futures-preview = "0.3.0-alpha.13"
+futures-test-preview = "0.3.0-alpha.13"

@@ -1,9 +1,9 @@
 #![feature(futures_api, async_await, await_macro)]
 
 use futures_core::{task::{Spawn, SpawnError}, future::{Future, FutureObj}};
-use futures_util::{task::SpawnExt, future::RemoteHandle};
+use futures_util::{task::SpawnExt, future::{self, RemoteHandle}};
 
-use std::{cell::RefCell, sync::Arc};
+use std::{cell::RefCell, sync::Arc, pin::Pin};
 
 trait SharedSpawn {
     fn spawn_obj(&self, future: FutureObj<'static, ()>) -> Result<(), SpawnError>;
@@ -37,16 +37,16 @@ thread_local! {
 struct GlobalSpawner;
 
 impl Spawn for GlobalSpawner {
-    fn spawn_obj(&mut self, future: FutureObj<'static, ()>) -> Result<(), SpawnError> {
+    fn spawn_obj(&mut self, mut future: FutureObj<'static, ()>) -> Result<(), SpawnError> {
         GLOBAL_SPAWNER.with(|spawner| {
             let spawner = spawner.borrow();
             let spawner = spawner.as_ref().expect("global spawner was set");
             spawner.spawn({
                 let spawner = spawner.clone();
-                async move {
-                    GLOBAL_SPAWNER.with(|global_spawner| global_spawner.replace(Some(spawner)));
-                    await!(future);
-                }
+                future::poll_fn(move |waker| {
+                    GLOBAL_SPAWNER.with(|global_spawner| global_spawner.replace(Some(spawner.clone())));
+                    Pin::new(&mut future).poll(waker)
+                })
             })
         })
     }
@@ -66,10 +66,19 @@ pub fn spawner() -> impl Spawn {
     GlobalSpawner
 }
 
-pub fn spawn(fut: impl Future<Output = ()> + Send + 'static) -> Result<(), SpawnError> {
-    spawner().spawn(fut)
+pub fn spawn(fut: impl Future<Output = ()> + Send + 'static) {
+    spawner().spawn(fut).unwrap()
 }
 
-pub fn spawn_with_handle<Fut: Future + Send + 'static>(fut: Fut) -> Result<RemoteHandle<Fut::Output>, SpawnError> where Fut::Output: Send {
-    spawner().spawn_with_handle(fut)
+pub fn spawn_with_handle<Fut: Future + Send + 'static>(fut: Fut) -> RemoteHandle<Fut::Output> where Fut::Output: Send {
+    spawner().spawn_with_handle(fut).unwrap()
+}
+
+pub fn run<Fut: Future + Send + 'static>(fut: Fut) -> Fut::Output where Fut::Output: Send {
+    let (tx, rx) = std::sync::mpsc::channel();
+    spawn(async move {
+        let value = await!(fut);
+        tx.send(value).unwrap();
+    });
+    rx.recv().unwrap()
 }

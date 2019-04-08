@@ -2,16 +2,14 @@
 
 use futures::{executor::ThreadPool, future::FutureExt, task::SpawnExt};
 
-use futures_global_spawner::{set_global_spawner, spawner, spawn_with_handle};
+use futures_global_spawner::{set_global_spawner, spawner, spawn_with_handle, run};
 
 #[test]
 fn smoke() {
-    let mut pool = ThreadPool::new().unwrap();
+    set_global_spawner(ThreadPool::new().unwrap());
 
-    set_global_spawner(pool.clone());
-
-    let result = pool.run(async {
-        let a = spawn_with_handle(async { 5 }).unwrap();
+    let result = run(async {
+        let a = spawn_with_handle(async { 5 });
         let b = spawner().spawn_with_handle(async { 6 }).unwrap();
         let (a, b) = await!(a.join(b));
         a + b
