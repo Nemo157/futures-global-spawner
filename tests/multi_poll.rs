@@ -5,8 +5,6 @@ use std::{thread, sync::{Arc, Mutex}, pin::Pin};
 use futures::{future::{Future, FutureExt, FutureObj}, task::{SpawnExt, ArcWake, SpawnError, Spawn, Poll}};
 use futures_test::future::FutureTestExt;
 
-use futures_global_spawner;
-
 #[test]
 fn smoke() {
     futures_global_spawner::set_global_spawner(ThreadPerPoll::new());

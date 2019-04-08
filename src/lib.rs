@@ -31,7 +31,7 @@ trait SharedSpawnExt: SharedSpawn {
 impl<Sp: SharedSpawn + ?Sized> SharedSpawnExt for Sp {}
 
 lazy_static! {
-    static ref GLOBAL_SPAWNER: RwLock<Option<Box<dyn SharedSpawn + Send + Sync + 'static>>> = RwLock::new(None);
+    static ref GLOBAL_SPAWNER: RwLock<Box<dyn SharedSpawn + Send + Sync + 'static>> = RwLock::new(Box::new(NoGlobalSpawner));
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -40,17 +40,29 @@ struct GlobalSpawner;
 impl Spawn for GlobalSpawner {
     fn spawn_obj(&mut self, future: FutureObj<'static, ()>) -> Result<(), SpawnError> {
         let spawner = GLOBAL_SPAWNER.read().unwrap();
-        let spawner = spawner.as_ref().expect("global spawner was set");
         spawner.spawn(future)
     }
 
     fn status(&self) -> Result<(), SpawnError> {
-        GLOBAL_SPAWNER.read().unwrap().as_ref().unwrap().status()
+        GLOBAL_SPAWNER.read().unwrap().status()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NoGlobalSpawner;
+
+impl SharedSpawn for NoGlobalSpawner {
+    fn spawn_obj(&self, _future: FutureObj<'static, ()>) -> Result<(), SpawnError> {
+        panic!("global spawner not configured")
+    }
+
+    fn status(&self) -> Result<(), SpawnError> {
+        panic!("global spawner not configured")
     }
 }
 
 pub fn set_global_spawner<Sp: Send + Sync + 'static>(spawner: Sp) where for<'a> &'a Sp: Spawn {
-    GLOBAL_SPAWNER.write().unwrap().replace(Box::new(spawner));
+    *GLOBAL_SPAWNER.write().unwrap() = Box::new(spawner);
 }
 
 pub fn spawner() -> impl Spawn {
